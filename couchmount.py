@@ -1,24 +1,17 @@
-# coding=utf-8
-# Hello World File System.
-
-__author__  = 'Frolov Evgeniy (profisphantom@gmail.com)'
-__license__ = 'GNU GPL'
-__version__ = '0.1'
-
-
 from sys import path
 path.append('..')
 
 from pydokan import Dokan
 from pydokan.struct import DOKAN_OPTION_KEEP_ALIVE, DOKAN_OPTION_REMOVABLE,\
     LPWSTR, WIN32_FIND_DATAW, PWIN32_FIND_DATAW, LPSTR
-from pydokan.wrapper.file import AccessMode, ShareMode, CreationDisposition, FlagsAndAttributes
+from pydokan.wrapper.file import AccessMode, ShareMode, CreationDisposition, 
+    FlagsAndAttributes
 from pydokan.wrapper.dokan import DokanFileInfo
 from pydokan.wrapper.security import SecurityInfo
 from pydokan.win32con import ERROR_FILE_NOT_FOUND, FILE_ATTRIBUTE_DIRECTORY,\
     ERROR_INVALID_HANDLE, FILE_CASE_SENSITIVE_SEARCH, FILE_UNICODE_ON_DISK,\
-    FILE_SUPPORTS_ENCRYPTION, FILE_SUPPORTS_REMOTE_STORAGE, FILE_ATTRIBUTE_NORMAL,\
-    ERROR_FILE_EXISTS
+    FILE_SUPPORTS_ENCRYPTION, FILE_SUPPORTS_REMOTE_STORAGE, \
+    FILE_ATTRIBUTE_NORMAL, ERROR_FILE_EXISTS, CREATE_NEW
 from pydokan.utils import wrap, log, DateTimeConvertor, SizeConvert
 from pydokan.debug import disable as disable_debug, force_breakpoint
 
@@ -31,6 +24,7 @@ from couchdb import Server
 import subprocess
 import os
 import json
+import ctypes
 
 
 DATABASE = "cozy-files"
@@ -54,12 +48,12 @@ def _path_split(path):
         folder_path = folder_path[:-(len(name)+1)]
     return (folder_path, name)
 
-class HelloWorldFS(Dokan, Thread):
-    
-    files = {'\\hello_world.txt': b'Hello World',
-             '\\ReadMe.txt': b'To unmount the disk, enter the path H:\\exit'}
-    
+class Couchmount(Dokan, Thread):
+        
     def __init__(self, app, mount_point, options, threads_count, version=600):
+        '''
+        Initialize Couchmount class
+        '''
         self.app = app
         Dokan.__init__(self, mount_point, options, threads_count, version)
         Thread.__init__(self)
@@ -69,12 +63,16 @@ class HelloWorldFS(Dokan, Thread):
         self.log_lock = Lock()
         self.counter = 1
         self.db = server[DATABASE]
+        self.currentFile = b''
     
     def run(self):
         self.mount_code = 0
         self.mount_code = self.main()
     
     def log_exception(self):
+        '''
+        Log exception
+        '''
         lines = traceback.format_exc().splitlines()
         self.log_lock.acquire()
         try:
@@ -85,46 +83,49 @@ class HelloWorldFS(Dokan, Thread):
             self.log_lock.release()
     
     @wrap(None, AccessMode, ShareMode, CreationDisposition, FlagsAndAttributes, DokanFileInfo)
-    #@log('path', 'access', 'share_mode', 'disposition', 'flags', 'info')
+    @log('path', 'access', 'share_mode', 'disposition', 'flags', 'info')
     def create_file(self, path, access, share_mode, disposition, flags, file_info):
-        #print(file_info)
-        #print('create_file')
-        #print(path)
+        '''
+        Create file if disposition flag is CREATE_NEW
+           path {string}: file path
+           access {AccessMode}: file permissions
+           share_mode {ShareMode}: 
+           disposition {CreationDisposition}: Flags 
+           file_info {Object}: file information
+        '''
         (file_path, name) = _path_split(path)
-        #print(file_path)
-        #print(name)
-        new_binary = {"docType": "Binary"}
-        #binary_id = self.db.create(new_binary)
-        #print(binary_id)
-        #self.db.put_attachment(self.db[binary_id], '', filename="file")
-        #print(self.db[binary_id])
+        if disposition == CreationDisposition(CREATE_NEW):
+            new_binary = {"docType": "Binary"}
+            binary_id = self.db.create(new_binary)
+            self.db.put_attachment(self.db[binary_id], '', filename="file")
 
-        #rev = self.db[binary_id]["_rev"]
-        #print(rev)
-        #newFile = {
-        #    "name": name,
-        #    "path": file_path,
-        #    "binary": {
-        #        "file": {
-        #            "id": binary_id,
-        #            "rev": rev
-        #        }
-        #    },
-        #    "docType": "File"
-        #}
-        #print(newFile)
-        #self.db.create(newFile)
-        #file_info.context = self.counter
-        #"self.counter += 1
+            rev = self.db[binary_id]["_rev"]
+
+            newFile = {
+                "name": name,
+                "path": file_path,
+                "binary": {
+                    "file": {
+                        "id": binary_id,
+                        "rev": rev
+                    }
+                },
+                "docType": "File"
+            }
+            self.db.create(newFile)
+            file_info.context = self.counter
+            self.counter += 1
         return 0          
     disable_debug('create_file')
 
     @wrap(None, DokanFileInfo)
-    #@log('path', 'info')
+    @log('path', 'info')
     def create_directory(self, path, file_info):
-        # Unmount disk if enter h:\exit path
-        print(path)
-        print('create_directory')
+        '''
+        Create new directory
+            path {string}: directory path
+            file_info {Object}: directory information
+        '''
         (folder_path, name) = _path_split(path)
         res = self.db.view('folder/byFullPath', key=folder_path+'/'+name)
         if len(res) > 0 :
@@ -143,13 +144,15 @@ class HelloWorldFS(Dokan, Thread):
     disable_debug('create_directory')
     
     @wrap(None, DokanFileInfo)
-    #@log('path', 'info')
+    @log('path', 'info')
     def open_directory(self, path, file_info):
-        print("open_directory")
-        print(path)
+        '''
+        Open directory
+            path {string}: directory path
+            file_info {Object}: directory information
+        '''
         path = _normalize_path_win_to_DB(path)
         res = self.db.view('folder/byFullPath', key=path)
-        print(len(res))
         if len(res) is not 0:
             return 0
         else:
@@ -157,15 +160,19 @@ class HelloWorldFS(Dokan, Thread):
     disable_debug('open_directory')
     
     @wrap(None, None, DokanFileInfo)
-    #@log('path', 'buf', 'info')
+    @log('path', 'buf', 'info')
     def get_info(self, path, buffer, file_info):
-        print('get_info')
-        #print(path)
+        '''
+        Get file or directory information
+            path {string}: directory path
+            buffer {buffer}: buffer to store file/directory information
+            file_info {Object}: directory information            
+        '''
         path = _normalize_path_win_to_DB(path)
         res = self.db.view('file/byFullPath', key=path)
-        if len(res) > 0:                
+        if len(res) > 0:  
             buffer[0].dwFileAttributes = FILE_ATTRIBUTE_NORMAL
-            win_size = SizeConvert(1).convert()
+            win_size = SizeConvert(144).convert()
             buffer[0].nFileSizeHigh = win_size[0]
             buffer[0].nFileSizeLow = win_size[1]
             buffer[0].nNumberOfLinks = 1
@@ -182,7 +189,6 @@ class HelloWorldFS(Dokan, Thread):
                 win_index = SizeConvert(1).convert()
                 buffer[0].nFileIndexHigh = win_index[0]
                 buffer[0].nFileIndexLow = win_index[1] 
-                print("ok")
             else:
                 return -ERROR_FILE_NOT_FOUND 
         dt_converter = DateTimeConvertor(datetime.today())
@@ -191,15 +197,19 @@ class HelloWorldFS(Dokan, Thread):
         buffer[0].ftLastAccessTime = dc
         buffer[0].ftLastWriteTime = dc
         buffer[0].dwVolumeSerialNumber = self.serial_number
-        #print(buffer[0])
         return 0 
     disable_debug('get_info')
     
     @wrap(None, DokanFileInfo)
-    #@log('path', 'info')
+    @log('path', 'info')
     def cleanup(self, path, file_info):
-        print("cleanup")
-        #print(file_info)
+        '''
+        Clean file: Cleanup is invoked when the function CloseHandle in Windows 
+        API is executed
+            path {string}: file/directory path
+            file_info {Object}: file/directory information
+        '''
+
         if file_info.delete_on_close:
             return -1
         file_info.context = 0
@@ -207,8 +217,13 @@ class HelloWorldFS(Dokan, Thread):
     disable_debug('cleanup')  
     
     @wrap(None, DokanFileInfo)
-    #@log('path', 'info')
+    @log('path', 'info')
     def close(self, path, file_info):
+        '''
+        Close file
+            path {string}: file/directory path
+            file_info {Object}: file/directory information
+        '''
         if file_info.context:
             print("ERROR: File not cleanupped?")
             file_info.context = 0
@@ -218,10 +233,13 @@ class HelloWorldFS(Dokan, Thread):
     disable_debug('close')
     
     @wrap(None, None, None, None, None, None, None, DokanFileInfo)
-    #@log('name', 'name_size', 'serial', 'max_component_len', \
-    #     'fs_flags', 'fs_name', 'fs_name_size', 'info')
+    @log('name', 'name_size', 'serial', 'max_component_len', \
+         'fs_flags', 'fs_name', 'fs_name_size', 'info')
     def get_volume_info(self, name_buff, name_size, sn, max_comonent_len, \
                         fs_flags, fs_name_buff, fs_name_size, file_info):
+        '''
+        TODOS
+        '''
         name = 'Hello World Device'
         fname = 'HelloWorldFS'
         memmove(name_buff, LPWSTR(name), (len(name) + 1) * 2)
@@ -237,104 +255,104 @@ class HelloWorldFS(Dokan, Thread):
     disable_debug('get_volume_info')
     
     @wrap(None, None, None, DokanFileInfo)
-    #@log('avail', 'total', 'free', 'info')
+    @log('avail', 'total', 'free', 'info')
     def get_free_space(self, free_bytes, total_bytes, total_free_bytes, file_info):
+        '''
+        TODOS
+        '''
         free_bytes[0] = 1048576 - len(self.files['\\hello_world.txt'])
         total_bytes[0] = 1048576
         total_free_bytes[0] = 1048576
         return 0
-    #disable_debug('get_free_space')
+    disable_debug('get_free_space')
     
     @wrap(None, None, None, DokanFileInfo)
-    #@log('path', 'pattern', 'func', 'info')
+    @log('path', 'pattern', 'func', 'info')
     def find_files_with_pattern(self, path, pattern, func, file_info):
-        print('find_files_with_pattern')
+        '''
+        Find files with a specific pattern        
+            path {string}: file/directory path
+            pattern {string}: parttern to find
+            func {function}: function to call with PWIN32_FIND_DATAW
+            file_info {Object}: file/directory information
+        '''
+        found = False
         file_info_raw = file_info.raw()
-        print(path)
         new_path = _normalize_path_win_to_DB(path)
         res = self.db.view('file/byFolder', key=new_path)
         for i in res:
             i = i.value
             if self.name_in_expression(pattern, i['name'], False):
+                found = True
                 dc = DateTimeConvertor(datetime.today()).convert()
-                #if self.name_in_expression(pattern, i['name'], False):
                 win_size = SizeConvert(1).convert()
                 info = WIN32_FIND_DATAW(
                     FILE_ATTRIBUTE_NORMAL, dc, dc, dc, win_size[0],
                     win_size[1], 0, 0, i['name'], ''
                 )
                 func(PWIN32_FIND_DATAW(info), file_info_raw)
-                print(i)
-
-        new_path = _normalize_path_win_to_DB(path)
-        res = self.db.view('folder/byFolder', key=new_path)
-        for i in res:
-            i = i.value
-            print(pattern)
-            print(i['name'])
-            print(self.name_in_expression(pattern, i['name'], False))
-            if self.name_in_expression(pattern, i['name'], False):
-                print(i)
-                dc = DateTimeConvertor(datetime.today()).convert()
-                #if self.name_in_expression(pattern, i['name'], False):
-                #folder_path = i['path'].replace('/','\\')
-                win_size = SizeConvert(1).convert()
-                info = WIN32_FIND_DATAW(
-                    FILE_ATTRIBUTE_DIRECTORY, dc, dc, dc, win_size[0],
-                    win_size[1], 0, 0, i['name'], ''
-                )
-                print('FILE_INFO_RAW')
-                print(file_info)
-                func(PWIN32_FIND_DATAW(info), file_info_raw)
-        return 0
-        #return -ERROR_INVALID_HANDLE
-    #disable_debug('find_files_with_pattern')
+                return 0
+        if not found:
+            res = self.db.view('folder/byFolder', key=new_path)
+            for i in res:
+                i = i.value
+                if self.name_in_expression(pattern, i['name'], False):
+                    found = True
+                    dc = DateTimeConvertor(datetime.today()).convert()
+                    win_size = SizeConvert(1).convert()
+                    info = WIN32_FIND_DATAW(
+                        FILE_ATTRIBUTE_DIRECTORY, dc, dc, dc, win_size[0],
+                        win_size[1], 0, 0, i['name'], ''
+                    )
+                    func(PWIN32_FIND_DATAW(info), file_info_raw)
+                    return 0
+            if not found:
+                return -ERROR_INVALID_HANDLE
+    disable_debug('find_files_with_pattern')
     
     @wrap(None, None, None, None, None, DokanFileInfo)
     @log('path', 'buf', 'length', 'length', 'offset', 'info')
     def read(self, path, buffer, length, buff_length, offset, file_info):
-        #if file_info.context:
+        '''
+        Read file
+            path {string}: file/directory path
+            buffer {buffer}: buffer to store file content 
+            length {integer}: max length to read
+            buff_length{LP_u_long}: pointer to buffer length
+            offser {integer}: file reading offset
+            file_info {Object}: file/directory information
+        '''
         new_path = _normalize_path_win_to_DB(path)
         res = self.db.view('file/byFullPath', key=new_path)
         if len(res) > 0:
             for file_info in res:
                 file_info = file_info.value
-                #print(file_info)
                 try:
                     bin_id = file_info['binary']['file']['id']
-                except e:
+                except Exception:
                     return -ERROR_INVALID_HANDLE
-                commande = ['curl', '-H', 'Content-Type: text/html','http://localhost:5984/cozy-files/%s/file' %bin_id]
-                process = subprocess.Popen(commande, shell = True, stdout=subprocess.PIPE, 
-                           stderr=subprocess.PIPE)
+                commande = ['curl', '-H', 'Content-Type: text/html',
+                            'http://localhost:5984/cozy-files/%s/file' %bin_id]
+                process = subprocess.Popen(commande, 
+                                           shell = True, 
+                                           stdout=subprocess.PIPE, 
+                                           stderr=subprocess.PIPE)
                 content, err = process.communicate()
-                #print(content)
-                #print(err)
-                #print(stdout)
-                #binary_attachment = self.db.get_attachment(bin_id, "file")
-                #if binary_attachment is None:
-                #if '_attachments' not in sdout:
-                #    return ''
-                #else:
-                #content = binary_attachment.read()
-                content = content.read()
-                content_length = len(content)
-                print(content_length)
-                if offset < content_length:
-                    print('if')
-                    if offset + length > content_length:
-                        pritn('if')
-                        length = content_length - offset
-                        print(length)
-                    buff = content[offset:offset+length]
-                else:
-                    print('else')
-                    buff = ''
-                #print(buff)
-                memmove(buffer, LPSTR(buff), len(buff))
-                buff_length[0] = len(buff)
-                print(buff_length[0])
-                return 0
+                try:
+                    json.loads(content)
+                    if content['error']:
+                        content = ""
+                except Exception:
+                    content_length = len(content)
+                    if offset < content_length:
+                        if offset + length > content_length:
+                            length = content_length - offset
+                        buff = ctypes.create_string_buffer(content[offset:offset+length])
+                    else:
+                        buff = ''
+                    memmove(buffer, content[offset:offset+length], length)
+                    buff_length[0] = length
+                    return 0
         else:
             return -ERROR_INVALID_HANDLE        
     disable_debug('read')
@@ -342,6 +360,13 @@ class HelloWorldFS(Dokan, Thread):
     @wrap(None, None, None , DokanFileInfo)
     @log('path', 'path', 'bool', 'info')
     def move(self, src, dst, replace, file_info):
+        '''
+        Move file or directory
+            src {string}: source file/directory path
+            dst {string}: destination file/directory path
+            replace {boolean}:
+            file_info {Object}: file/directory information
+        '''
         def move_file(src, dst, doc):
             pathfrom = _normalize_path_win_to_DB(src)
             (pathto, nameto) = _path_split(dst)
@@ -385,7 +410,11 @@ class HelloWorldFS(Dokan, Thread):
     @wrap(None, DokanFileInfo)
     @log('path', 'info')
     def delete_file(self, path, file_info):
-        print('DELLLETTTE  FILLE')
+        '''
+        Delete file 
+            path {string}: file path
+            file_info {Object}: file information
+        '''
         path = _normalize_path_win_to_DB(path)
         res = self.db.view('file/byFullPath', key=path)
         if len(res) > 0:
@@ -402,6 +431,12 @@ class HelloWorldFS(Dokan, Thread):
     @wrap(None, DokanFileInfo)
     @log('path', 'info')
     def delete_directory(self, path, file_info):
+        '''
+        Delete directory:
+
+            path {string}: directory path
+            file_info {Object}: directory information
+        '''
         def delete_folder(folder):        
             self.db.delete(self.db[folder['_id']])
             # Remove all subfiles
@@ -433,9 +468,31 @@ class HelloWorldFS(Dokan, Thread):
     @wrap(None, None, None, None, None, DokanFileInfo)
     @log('path', 'buf', 'length', 'written', 'offset', 'info')
     def write(self, path, buffer, length, writen_length, offset, file_info):
-        if file_info.context:
+        '''
+        Write content in file         
+            path {string}: file path
+            buffer {buffer}: content to write
+            length {integer}: max content length
+            written_length {LP_u_long}: content length to write
+            offset {integer}: file offset
+            file_info {Object}: file information
+        '''
+        new_path = _normalize_path_win_to_DB(path)
+        res = self.db.view('file/byFullPath', key=new_path)
+        if len(res) > 0:    
             buffer = string_at(buffer, length)
-            self.files[path] = self.files[path][:offset] + buffer + self.files[path][offset+length:]
+            self.currentFile = self.currentFile[:offset] + buffer + self.currentFile[offset+length:]
+            if writen_length[0] < length:
+                for doc in res:
+                    doc = doc.value
+                    binary_id = doc["binary"]["file"]["id"]
+                    self.db.put_attachment(self.db[binary_id],
+                                           self.currentFile,
+                                           filename = "file")
+                    binary = self.db[binary_id]
+                    doc['binary']['file']['rev'] = binary['_rev']
+                    self.db.save(doc)
+                    self.currentFile = b''
             return 0
         else:
             return -ERROR_INVALID_HANDLE
@@ -472,7 +529,7 @@ class App():
 
 def main():
     app = App()
-    app.hwfs = HelloWorldFS(app, 'H', DOKAN_OPTION_KEEP_ALIVE | DOKAN_OPTION_REMOVABLE, 5)
+    app.hwfs = Couchmount(app, 'H', DOKAN_OPTION_KEEP_ALIVE | DOKAN_OPTION_REMOVABLE, 5)
     app.hwfs.start()
 
 if __name__ == '__main__':
