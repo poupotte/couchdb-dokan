@@ -70,7 +70,7 @@ class Couchmount(Dokan, Thread):
         Thread.__init__(self)
         self.mount_code = 0
         self.serial_number = 0x19831116
-        # Lock for decorator #@log. Callback`s loging...
+        # Lock for decorator @log. Callback`s loging...
         self.log_lock = Lock()
         self.counter = 1
         self.db = server[DATABASE]
@@ -148,12 +148,20 @@ class Couchmount(Dokan, Thread):
             file_info.context = self.counter
             file_info.is_directory = False
             self.counter += 1
-            replicate_from_local_ids([binary_id])
+            #replicate_from_local_ids([binary_id])
 
-        def delete_old_file(doc):                        
+        def replace_old_file(doc):                        
             binary = self.db[doc['binary']['file']['id']]
             self.db.delete(binary)
-            self.db.delete(self.db[doc['_id']])
+            new_binary = {"docType": "Binary"}
+            binary_id = self.db.create(new_binary)
+            self.db.put_attachment(self.db[binary_id], '', filename="file")
+            rev = self.db[binary_id]["_rev"]
+            doc['size'] = 0
+            doc['binary']['file']['id'] = binary_id
+            doc['binary']['file']['rev'] = rev
+            self.db.save(doc) 
+
 
         (file_path, name) = _path_split_lower(path)
 
@@ -166,10 +174,9 @@ class Couchmount(Dokan, Thread):
                     # Return an error if disposition is CREATE_NEW
                     return -ERROR_ALREADY_EXISTS
                 else:            
-                    # Delete old file and create a new file if disposition is CREATE_ALWAYS    
+                    # Delete old file and create a new file if disposition is CREATE_ALWAYS   
                     for doc in res:
-                        delete_old_file(doc.value)
-                    file_creation()
+                        replace_old_file(doc.value)
             else:
                 # File doesn't exist
                 file_creation()
@@ -704,7 +711,7 @@ class Couchmount(Dokan, Thread):
                 doc["lastModification"] = today.strftime('%a %b %d %Y %H:%M:%S')
                 self.db.save(doc)
                 writen_length[0] = length
-                replicate_from_local_ids([binary_id])
+                #replicate_from_local_ids([binary_id])
             return 0
         else:
             return -ERROR_INVALID_HANDLE
