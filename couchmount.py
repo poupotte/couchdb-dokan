@@ -12,7 +12,8 @@ from pydokan.win32con import ERROR_FILE_NOT_FOUND, FILE_ATTRIBUTE_DIRECTORY,\
     ERROR_INVALID_HANDLE, FILE_CASE_SENSITIVE_SEARCH, FILE_UNICODE_ON_DISK,\
     FILE_SUPPORTS_ENCRYPTION, FILE_SUPPORTS_REMOTE_STORAGE, \
     FILE_ATTRIBUTE_NORMAL, ERROR_FILE_EXISTS, CREATE_NEW, ERROR_ALREADY_EXISTS,\
-    CREATE_ALWAYS, OPEN_ALWAYS, FILE_ATTRIBUTE_TEMPORARY  
+    CREATE_ALWAYS, OPEN_ALWAYS, FILE_ATTRIBUTE_TEMPORARY, FILE_ATTRIBUTE_HIDDEN, \
+    FILE_SUPPORTS_REPARSE_POINTS    
 from pydokan.utils import wrap, log, DateTimeConvertor, SizeConvert
 from pydokan.debug import disable as disable_debug, force_breakpoint
 
@@ -31,33 +32,54 @@ import ctypes
 
 DATABASE = "cozy-files"
 server = Server("http://localhost:5984/")
+database = server[DATABASE]
+
 
 def _normalize_path_win_to_DB_lower(path):
-    if path is '\\':
-        return ''
-    else:
-        return path.replace('\\', '/').lower()
+    res = database.view('device/all')
+    for device in res:
+        name = device.value['login'].lower()
+        if path is '\\':
+            return "/%s" %name
+        else:
+            return "/%s" %name + path.replace('\\', '/').lower()
 
 def _normalize_path_DB_to_win_lower(path):
-    return path.replace('/', '\\').lower()
+    res = database.view('device/all')
+    for device in res:
+        login = device.value['login'].lower()
+        path = path.replace("/%s" %name, '\\')
+        return path.replace('/', '\\').lower()
 
 def _path_split_lower(path):
     '''
     '''
-    path = path.replace('\\', '/')
-    (folder_path, name) = os.path.split(path)
-    if folder_path[-1:] == '/':
-        folder_path = folder_path[:-(len(name)+1)]
-    return (folder_path.lower(), name.lower())
+    res = database.view('device/all')
+    for device in res:
+        login = device.value['login'].lower()
+        if path is '\\':
+            path = "/%s" %login
+        else:
+            path = "/%s" %login + path.replace('\\', '/')
+        (folder_path, name) = os.path.split(path)
+        if folder_path[-1:] == '/':
+            folder_path = folder_path[:-(len(name)+1)]
+        return (folder_path.lower(), name.lower())
 
 def _path_split(path):
     '''
     '''
-    path = path.replace('\\', '/')
-    (folder_path, name) = os.path.split(path)
-    if folder_path[-1:] == '/':
-        folder_path = folder_path[:-(len(name)+1)]
-    return (folder_path, name)
+    res = database.view('device/all')
+    for device in res:
+        login = device.value['login']
+        if path is '\\':
+            path = "/%s" %login
+        else:
+            path = "/%s" %login + path.replace('\\', '/')
+        (folder_path, name) = os.path.split(path)
+        if folder_path[-1:] == '/':
+            folder_path = folder_path[:-(len(login)+1)]
+        return (folder_path, name)
 
 class Couchmount(Dokan, Thread):
         
@@ -260,7 +282,7 @@ class Couchmount(Dokan, Thread):
                     buffer[0].dwFileAttributes = FILE_ATTRIBUTE_NORMAL
                 else:
                     # Temporary file
-                    buffer[0].dwFileAttributes = FILE_ATTRIBUTE_TEMPORARY                  
+                    buffer[0].dwFileAttributes = FILE_ATTRIBUTE_HIDDEN                
                 if 'size' in doc.value:
                     win_size = SizeConvert(doc.value['size']).convert()
                 else:
@@ -411,15 +433,15 @@ class Couchmount(Dokan, Thread):
                     dt_converter_creation = DateTimeConvertor(datetime.strptime(creationDate, '%a %b %d %Y %H:%M:%S'))
                     dc_creation = dt_converter.convert()
                 else:
-                    dc_creation = dc     
-                if path.find('~') == -1:
+                    dc_creation = dc
+                if doc['name'].find('~') == -1:
                     info = WIN32_FIND_DATAW(
                         FILE_ATTRIBUTE_NORMAL, dc_creation, dc, dc, 
                         win_size[0], win_size[1], 0, 0, doc['name'], ''
                     )
                 else:
                     info = WIN32_FIND_DATAW(
-                        FILE_ATTRIBUTE_TEMPORARY, dc_creation, dc, dc,
+                        FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY, dc_creation, dc, dc,
                         win_size[0], win_size[1], 0, 0, doc['name'], ''
                     )        
                 func(PWIN32_FIND_DATAW(info), file_info_raw)
@@ -461,7 +483,7 @@ class Couchmount(Dokan, Thread):
     disable_debug('set_security_info')
 
     @wrap(None, None, DokanFileInfo)
-    def set_attributes(self, path, attributes, file_info ):
+    def set_attributes(self, path, attributes, file_info):
         return 0
     disable_debug('set_attributes')
 
@@ -523,14 +545,14 @@ class Couchmount(Dokan, Thread):
                     file_info.context = 1
             else:
                 return -ERROR_INVALID_HANDLE 
-            content_length = len(content)
-            if offset < content_length:
-                if offset + length > content_length:
-                    length = content_length - offset
-                    # Remove binary in read_current_file
-                    del self.read_current_file[new_path]
-            else:
-                length = 0
+        content_length = len(content)
+        if offset < content_length:
+            if offset + length > content_length:
+                length = content_length - offset
+                # Remove binary in read_current_file
+                del self.read_current_file[new_path]
+        else:
+            length = 0
         memmove(buffer, content[offset:offset+length], length)
         buff_length[0] = length
         return 0       
@@ -633,7 +655,7 @@ class Couchmount(Dokan, Thread):
             return 0
         else:
             return -ERROR_INVALID_HANDLE
-    disable_debug('delete_file')
+    disable_debug('delete_file')    
 
     @wrap(None, DokanFileInfo)
     @log('path', 'info')
@@ -698,9 +720,18 @@ class Couchmount(Dokan, Thread):
                                            shell = True, 
                                            stdout=subprocess.PIPE, 
                                            stderr=subprocess.PIPE)
-                currentFile, err = process.communicate()
-                # Add changes in binary
-                currentFile = currentFile[:offset] + buffer + currentFile[offset:]
+                currentFile, err = process.communicate()    
+                cmd = 'WMIC PROCESS get Caption,Commandline,Processid | grep %s' %file_info.process_id
+                proc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE)
+                microsoft = False
+                for line in proc.stdout:
+                    line = str(line, encoding='utf8')
+                    if not(line.find('Microsoft Office') is -1):
+                        microsoft = True
+                if microsoft:
+                    currentFile = currentFile[:offset] + buffer + currentFile[offset:]
+                else:
+                    currentFile = currentFile[:offset] + buffer + currentFile[offset+length:]
                 self.db.put_attachment(self.db[binary_id],
                                        currentFile,
                                        filename = "file")
@@ -711,7 +742,7 @@ class Couchmount(Dokan, Thread):
                 doc["lastModification"] = today.strftime('%a %b %d %Y %H:%M:%S')
                 self.db.save(doc)
                 writen_length[0] = length
-                #replicate_from_local_ids([binary_id])
+                replicate_from_local_ids([binary_id])
             return 0
         else:
             return -ERROR_INVALID_HANDLE
